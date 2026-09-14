@@ -131,6 +131,8 @@ nvidia-smi --query-gpu=memory.used,memory.total --format=csv
 | OpenSRE : `'max_tokens' is too large … 20881 input tokens` | les schémas d'outils pèsent ~20,9k tokens | contexte 32768 + `LLM_MAX_TOKENS=2048` |
 | `Nothing ran: one action per response` | `parallel_tool_calls` n'est pas envoyé aux endpoints non-OpenAI | RECON.md §16 — correctif upstream |
 | Agent : « aucun pod dans demo » alors qu'il y en a | `namespace` est un `injected_param` | `KUBECONFIG_NAMESPACE=demo` — RECON.md §17 |
+| Le gateway démarre mais un correctif n'a pas d'effet | un ancien gateway tient encore le port ; `pkill -f <motif>` se tue lui-même | `ss -lptn 'sport = :8765'` puis `kill <pid>` |
+| `component openai_compat: failed (could not bind …)` | port déjà pris | libérer le port ; le listener refuse de démarrer à moitié, c'est voulu |
 | L'agent répète une réponse fausse dans un fil | l'historique du fil, pas le câblage — il ne rappelle plus l'outil | taper `/new` dans le fil, ou en ouvrir un neuf |
 | `PrincipalResolutionError: no organization is configured` | `ORGANIZATION_ID` absent | le déclarer dans `.env` — tout transport chat en a besoin |
 | `gateway turn has no bound metering request` | le tour n'est pas enveloppé dans `bound_turn_metering` | bug de transport, pas de config |
@@ -165,6 +167,35 @@ Récupérer l'id d'un compte :
 ```bash
 curl -sS -H "Authorization: Bearer $MATTERMOST_BOT_TOKEN" \
   "$MATTERMOST_URL/api/v4/users/username/$MM_ADMIN_USERNAME" | jq -r .id
+```
+
+## Parler à l'agent depuis Open WebUI
+
+Le gateway expose une surface OpenAI-compatible sur le port 8765 (clé
+obligatoire). Open WebUI la consomme comme un modèle nommé `opensre`.
+
+```bash
+docker compose -f compose/docker-compose.yml --env-file .env --profile ui up -d open-webui
+# http://localhost:3001 -> choisir le modèle "opensre"
+```
+
+Depuis un conteneur, le gateway tourne sur l'hôte : l'adresse est la passerelle
+du bridge docker (`172.18.0.1:8765`), pas `localhost`.
+
+Régler le *task model* (titres, tags) sur le vLLM direct dans les réglages de
+l'UI, sinon chaque génération de titre déclenche une investigation.
+
+Commandes utiles dans le chat : `/new` (session neuve — le remède au fil qui
+répète une réponse fausse) et `/stop`.
+
+Test en ligne de commande :
+
+```bash
+curl -sS -N http://localhost:8765/v1/chat/completions \
+  -H "Authorization: Bearer $OPENAI_COMPAT_API_KEY" \
+  -H 'Content-Type: application/json' -H 'X-OpenWebUI-Chat-Id: demo' \
+  -d '{"model":"opensre","stream":true,
+       "messages":[{"role":"user","content":"Liste les pods du namespace demo."}]}'
 ```
 
 ## Arrêt / remise à zéro

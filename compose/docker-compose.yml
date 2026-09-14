@@ -209,6 +209,12 @@ services:
     container_name: poc-open-webui
     restart: unless-stopped
     profiles: [ui]
+    # Two endpoints on purpose: "opensre" is the agent (the gateway's
+    # OpenAI-compatible transport, reached on the docker bridge gateway because
+    # it runs on the host), and the vLLM endpoint is the same model with no
+    # agent around it — the baseline to compare against.
+    # Set the task model (titles/tags) to the vLLM one in the UI, or every
+    # title generation starts an investigation.
     environment:
       OPENAI_API_BASE_URLS: ${OPENWEBUI_API_BASES:-http://vllm:8000/v1}
       OPENAI_API_KEYS: ${OPENWEBUI_API_KEYS:-EMPTY}

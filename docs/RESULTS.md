@@ -190,6 +190,49 @@ fil contamine le fil entier**. Sur un modèle 14B qui se trompe une fois sur deu
 (§3), cela veut dire qu'il faut ouvrir un fil neuf par incident, et savoir taper
 `/new` quand un fil part de travers.
 
+## 6ter. Surface OpenAI-compatible — livrée, Open WebUI branché
+
+Commit `ae8c6806e`. `make pre-push` 9/9, 16 tests.
+
+| Vérification (gateway démarré) | Résultat |
+| --- | --- |
+| `component openai_compat: serving /v1` | ✅ |
+| `GET /v1/models` avec clé | ✅ un modèle `opensre` |
+| `GET /v1/models` sans clé | ✅ **401** |
+| Complétion non-streamée → cluster réel | ✅ pod listé, **38 redémarrages** |
+| Streaming SSE | ✅ **9 frames de progression** nommant les vrais outils |
+| `/stop`, `/new` (JSON **et** SSE) | ✅ |
+| Open WebUI voit le modèle `opensre` | ✅ depuis son conteneur |
+
+**C'est un transport, pas une route de `gateway/web`** : il lie le turn runner
+et la sortie de tour, ce que la surface web s'interdit explicitement. Le
+listener Events API de Slack est dans son propre paquet transport pour la même
+raison — le docstring du dépôt le dit mot pour mot.
+
+Le tour tourne sur un thread d'exécuteur et publie sa progression dans une file
+que la réponse draine. C'est ce qui permet d'afficher chaque appel d'outil
+pendant que le tour tourne encore, et ce qui fait qu'un tour lent ne bloque
+jamais le listener.
+
+**La clé d'API est obligatoire**, pas optionnelle-avec-avertissement : un
+endpoint sans clé ferait tourner des tours d'agent pour quiconque atteint le
+port. Pas de clé = *non configuré*, donc ignoré au démarrage.
+
+Open WebUI (profil `ui`) expose deux endpoints : `opensre` (l'agent) et le vLLM
+direct (le même modèle sans agent autour) — de quoi comparer « modèle seul » et
+« modèle + OpenSRE ». Régler le *task model* sur le vLLM direct dans l'UI, sinon
+chaque génération de titre déclenche une investigation.
+
+### Une leçon de méthode
+
+Trois tests réels d'affilée ont accusé un bug déjà corrigé : un **ancien gateway
+tournait encore** et tenait le port, si bien que mes requêtes frappaient le
+process d'avant le correctif. Le vrai coupable était mes `pkill -f <motif>`, qui
+se tuaient eux-mêmes parce que leur propre ligne de commande contient le motif.
+Le nouveau listener, lui, s'est comporté correctement : il a signalé
+`failed (could not bind 0.0.0.0:8765)` au lieu de démarrer à moitié.
+Vérifier `ss -lptn 'sport = :<port>'` avant de conclure.
+
 ## 7. À faire ensuite
 
 1. **Baseline hébergée** — rejouer la même question avec `LLM_PROVIDER=anthropic` pour
