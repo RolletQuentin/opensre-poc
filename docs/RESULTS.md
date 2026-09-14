@@ -67,6 +67,26 @@ respecte la contrainte, ou un durcissement de la consigne dans le prompt.
 Ceci **inverse** l'hypothèse du plan §3, qui prévoyait de *retirer* `parallel_tool_calls`
 pour vLLM. Détail complet : RECON.md §16.
 
+### Correctif appliqué, et ce qu'il change (mesuré)
+
+Branche `poc/openai-compat-single-action`, commit `12ded5cae` : le paramètre est envoyé à
+tout endpoint OpenAI-compatible, avec repli sur 400 (l'équivalent SDK du `drop_params` de
+LiteLLM). `make pre-push` vert 9/9.
+
+| Run | Rejets « one action per response » | Durée | Issue |
+| --- | --- | --- | --- |
+| avant correctif | 3 | ~80 s | conclusion hors sujet (mauvais namespace) |
+| après correctif, run A | non mesuré (sortie tronquée) | 382 s | **cause racine correcte** |
+| après correctif, run B | **2** | 237 s | bloqué, rend la main à l'utilisateur |
+
+**Le correctif ne supprime pas les rejets sur vLLM**, conformément à la mesure directe
+ci-dessus : vLLM accepte le paramètre sans l'appliquer. Il reste juste — il aligne le
+transport SDK sur le transport LiteLLM et sert tout endpoint qui honore le paramètre —
+mais le levier pour ce POC est le **modèle et son parser**, pas OpenSRE.
+
+La variance entre deux runs identiques est forte (cause racine correcte vs abandon),
+ce qui est le vrai signal sur la tenue d'un 14B dans cette boucle agent.
+
 ## 4. Deuxième blocage : le namespace est imposé
 
 L'agent interrogé sur `demo` répond « aucun pod dans le namespace demo » alors que le pod
