@@ -131,12 +131,40 @@ nvidia-smi --query-gpu=memory.used,memory.total --format=csv
 | OpenSRE : `'max_tokens' is too large … 20881 input tokens` | les schémas d'outils pèsent ~20,9k tokens | contexte 32768 + `LLM_MAX_TOKENS=2048` |
 | `Nothing ran: one action per response` | `parallel_tool_calls` n'est pas envoyé aux endpoints non-OpenAI | RECON.md §16 — correctif upstream |
 | Agent : « aucun pod dans demo » alors qu'il y en a | `namespace` est un `injected_param` | `KUBECONFIG_NAMESPACE=demo` — RECON.md §17 |
+| `PrincipalResolutionError: no organization is configured` | `ORGANIZATION_ID` absent | le déclarer dans `.env` — tout transport chat en a besoin |
+| `gateway turn has no bound metering request` | le tour n'est pas enveloppé dans `bound_turn_metering` | bug de transport, pas de config |
 | Alerte qui se résout alors que le pod casse toujours | fenêtre de 5 min < backoff max de 5 min | fenêtres à 15m / 10m |
 | Message Alertmanager sur une seule ligne | bloc YAML replié `>-` | bloc littéral `|-` |
 | Alertmanager n'atteint pas Mattermost | `.env` contient l'URL `localhost`, inatteignable du conteneur | écrire `http://mattermost:8065/...` dans le fichier lu par Alertmanager |
 | Mattermost refuse d'appeler la slash command | IP interne non autorisée | `MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS` |
 | `mmctl` : `This command cannot be run in local mode` | bots / tokens / webhooks exigent une session | API REST en tant qu'admin |
 | slash command introuvable à la relecture | les commandes intégrées masquent la recherche | `?custom_only=true` |
+
+## Parler à l'agent depuis Mattermost
+
+Le transport se connecte en **WebSocket sortant** : rien à exposer, pas de
+NodePort, pas de slash command.
+
+```bash
+cd ~/Projects/opensre
+set -a; . ~/Projects/opensre-poc/.env; set +a
+export KUBECONFIG=~/Projects/opensre-poc/kubeconfig-opensre.yaml
+export CUSTOM_OPENAI_BASE_URL=http://localhost:8000/v1
+export MATTERMOST_ALLOWED_USERS=<id du compte Mattermost autorisé>
+export PORT=8099          # le 8080 du plan sert au gateway dans kind
+uv run opensre gateway start --foreground
+```
+
+Attendre `component mattermost: websocket connected`, puis répondre dans le fil
+de l'alerte sur http://localhost:8065. L'agent édite un post placeholder dans ce
+même fil pendant tout le tour.
+
+Récupérer l'id d'un compte :
+
+```bash
+curl -sS -H "Authorization: Bearer $MATTERMOST_BOT_TOKEN" \
+  "$MATTERMOST_URL/api/v4/users/username/$MM_ADMIN_USERNAME" | jq -r .id
+```
 
 ## Arrêt / remise à zéro
 

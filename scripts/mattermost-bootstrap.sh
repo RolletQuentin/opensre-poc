@@ -122,6 +122,7 @@ if [[ -z "$SLASH_TOKEN" ]]; then
 fi
 
 # --- 6. persist ------------------------------------------------------------
+put_env MATTERMOST_URL               "$MM"
 put_env MATTERMOST_WEBHOOK_URL       "$HOOK_URL"
 put_env MATTERMOST_BOT_TOKEN         "$BOT_TOKEN"
 put_env MATTERMOST_DEFAULT_CHANNEL_ID "$CH_ID"

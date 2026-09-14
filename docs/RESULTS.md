@@ -121,6 +121,60 @@ Tous les outils sont envoyés à chaque appel, quelle que soit la question.
 | Un tour `opensre ask` (plusieurs appels d'outils, eager) | 70–80 s |
 | `opensre health` (61 intégrations sondées) | ~30 s |
 
+## 6bis. Transport Mattermost — livré et vérifié en vrai
+
+Branche `poc/openai-compat-single-action`, commits `24de1eb24` (intégration) et
+`34d4dab48` (transport). `make pre-push` 9/9 sur chacun.
+
+Vérifié gateway démarré contre Mattermost 10.5 :
+
+| Étape | Résultat |
+| --- | --- |
+| `component mattermost: websocket connected` | ✅ |
+| Réponse humaine dans le fil de l'alerte → tour agent réel | ✅ `turn done` en 87 s |
+| Réponse écrite **dans le fil** (`root_id`) | ✅ vérifié côté serveur |
+| Post placeholder **édité en place** | ✅ `edit_at` non nul |
+| `opensre health` voit Mattermost | ✅ `Connected to Mattermost as @opensre` |
+
+**Choix de conception : WebSocket, pas slash command.** Le bot compose vers
+l'extérieur, donc le gateway n'a besoin d'aucune route HTTP entrante, d'aucune
+adresse publique, et d'aucune entrée dans
+`MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS`. Cela supprime tout le
+problème « Mattermost doit joindre le cluster » du plan §5.3 — le NodePort 30080
+et la slash command `/sre` deviennent inutiles pour le chemin de démo.
+
+**L'unité de conversation est le fil, pas l'utilisateur** : clé de session
+`channel:root_id`, verrou par fil. Deux incidents dans deux fils tournent en
+parallèle avec des sessions séparées.
+
+**Les approbations sont refusées par construction** : les boutons interactifs de
+Mattermost rappellent un endpoint HTTP que ce transport n'a délibérément pas.
+Chaque outil sous approbation est refusé et la raison est écrite dans le fil.
+
+### Deux prérequis d'environnement découverts en test réel
+
+1. **`ORGANIZATION_ID` est obligatoire.** Sans lui, tout transport chat refuse le
+   tour (`PrincipalResolutionError: no organization is configured`). Ce n'est pas
+   propre à Mattermost — Telegram échouerait pareil. Ajouté au `.env` du POC.
+2. **Le runner partagé exige une requête de metering liée.** Un tour sans
+   `bound_turn_metering` meurt sur
+   `RuntimeError: gateway turn has no bound metering request`. Trouvé en test
+   réel, pas par les tests unitaires : c'est exactement ce que le test live
+   servait à attraper.
+
+### Question ouverte
+
+Le tour lancé depuis Mattermost a répondu « aucun pod dans le namespace demo »
+alors que le pod y tournait et que `KUBECONFIG_NAMESPACE=demo` était bien présent
+dans l'environnement du process gateway. Écarté : le namespace injecté (la config
+résolue porte bien `demo`), le kubeconfig (chemin correct), et un `.env` du dépôt
+qui écraserait l'environnement (il n'y en a pas, et le chargement est
+`override=False`). Reste à trancher entre variance du modèle (déjà observée au
+§3, deux runs identiques donnant cause racine correcte puis abandon) et une
+différence de câblage entre le profil CLI et le profil gateway. Le transport
+lui-même est hors de cause : le tour a bien tourné, et la réponse a bien été
+livrée au bon endroit.
+
 ## 7. À faire ensuite
 
 1. **Baseline hébergée** — rejouer la même question avec `LLM_PROVIDER=anthropic` pour
