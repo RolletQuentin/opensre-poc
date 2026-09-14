@@ -162,18 +162,33 @@ Chaque outil sous approbation est refusé et la raison est écrite dans le fil.
    réel, pas par les tests unitaires : c'est exactement ce que le test live
    servait à attraper.
 
-### Question ouverte
+### L'historique d'un fil peut empoisonner tous ses tours suivants
 
-Le tour lancé depuis Mattermost a répondu « aucun pod dans le namespace demo »
-alors que le pod y tournait et que `KUBECONFIG_NAMESPACE=demo` était bien présent
-dans l'environnement du process gateway. Écarté : le namespace injecté (la config
-résolue porte bien `demo`), le kubeconfig (chemin correct), et un `.env` du dépôt
-qui écraserait l'environnement (il n'y en a pas, et le chargement est
-`override=False`). Reste à trancher entre variance du modèle (déjà observée au
-§3, deux runs identiques donnant cause racine correcte puis abandon) et une
-différence de câblage entre le profil CLI et le profil gateway. Le transport
-lui-même est hors de cause : le tour a bien tourné, et la réponse a bien été
-livrée au bon endroit.
+Symptôme : l'agent répondait « aucun pod dans le namespace demo » alors que le pod
+tournait, que `KUBECONFIG_NAMESPACE=demo` était bien dans l'environnement du
+process, et que la config résolue portait `demo`.
+
+**Cause : la conversation, pas le câblage.** Un tour précédent de ce fil avait
+conclu « aucun pod », et chaque tour suivant répétait cette conclusion depuis
+l'historique au lieu d'appeler à nouveau l'outil — en 27 s, sans appel d'outil.
+
+Démonstration en deux temps, même gateway, même environnement :
+
+| Fil | Session | Réponse |
+| --- | --- | --- |
+| fil existant | `ee3b9a44` (réutilisée) | « aucun pod dans demo » — faux |
+| **fil neuf** | `f438b169` (neuve) | `broken-app-6d595ccf46-g7mzs`, Ready `False`, **36 redémarrages** — exact |
+| fil existant après **`/new`** | `9e8e25c1` (rotée) | liste complète et exacte du pod |
+
+**Les outils fonctionnent parfaitement à travers le gateway.** Rien à corriger
+côté câblage : ni le namespace injecté, ni le kubeconfig, ni le profil de
+process. `/new` est le remède, et ce test valide au passage le chemin de rotation
+de session du transport.
+
+Conséquence opérationnelle pour la démo : **une mauvaise conclusion en début de
+fil contamine le fil entier**. Sur un modèle 14B qui se trompe une fois sur deux
+(§3), cela veut dire qu'il faut ouvrir un fil neuf par incident, et savoir taper
+`/new` quand un fil part de travers.
 
 ## 7. À faire ensuite
 

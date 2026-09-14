@@ -131,6 +131,7 @@ nvidia-smi --query-gpu=memory.used,memory.total --format=csv
 | OpenSRE : `'max_tokens' is too large … 20881 input tokens` | les schémas d'outils pèsent ~20,9k tokens | contexte 32768 + `LLM_MAX_TOKENS=2048` |
 | `Nothing ran: one action per response` | `parallel_tool_calls` n'est pas envoyé aux endpoints non-OpenAI | RECON.md §16 — correctif upstream |
 | Agent : « aucun pod dans demo » alors qu'il y en a | `namespace` est un `injected_param` | `KUBECONFIG_NAMESPACE=demo` — RECON.md §17 |
+| L'agent répète une réponse fausse dans un fil | l'historique du fil, pas le câblage — il ne rappelle plus l'outil | taper `/new` dans le fil, ou en ouvrir un neuf |
 | `PrincipalResolutionError: no organization is configured` | `ORGANIZATION_ID` absent | le déclarer dans `.env` — tout transport chat en a besoin |
 | `gateway turn has no bound metering request` | le tour n'est pas enveloppé dans `bound_turn_metering` | bug de transport, pas de config |
 | Alerte qui se résout alors que le pod casse toujours | fenêtre de 5 min < backoff max de 5 min | fenêtres à 15m / 10m |
