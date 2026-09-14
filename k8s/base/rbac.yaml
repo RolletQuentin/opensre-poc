@@ -1,0 +1,55 @@
+# Least-privilege read-only role for the OpenSRE agent.
+#
+# Scope derived by reading integrations/kubernetes/ at opensre@0012697ed:
+# every Kubernetes SDK call the integration can emit, and nothing else.
+# See docs/RECON.md §14.2. No write verbs. No access to secrets.
+#
+# NOTE: the integration never calls load_incluster_config(), so binding this
+# role to the ServiceAccount is necessary but NOT sufficient — the pod also
+# needs a kubeconfig file built from the projected SA token. See RECON.md §7.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: opensre-reader
+rules:
+  - apiGroups: [""]
+    resources:
+      - namespaces          # list_namespace
+      - nodes               # list_node, read_node
+      - pods                # list_namespaced_pod, read_namespaced_pod
+      - pods/log            # read_namespaced_pod_log
+      - events              # list_namespaced_event
+      - services            # list/read_namespaced_service
+      - configmaps          # list/read_namespaced_config_map
+      - persistentvolumeclaims  # read_namespaced_persistent_volume_claim
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments         # list/read_namespaced_deployment
+      - statefulsets        # list/read_namespaced_stateful_set
+      - daemonsets          # list/read_namespaced_daemon_set
+      - replicasets         # read_namespaced_replica_set
+    verbs: ["get", "list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses           # list/read_namespaced_ingress
+    verbs: ["get", "list"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opensre
+  namespace: opensre
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: opensre-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: opensre-reader
+subjects:
+  - kind: ServiceAccount
+    name: opensre
+    namespace: opensre

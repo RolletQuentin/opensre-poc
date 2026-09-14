@@ -1,0 +1,36 @@
+# The demo failure for the end-to-end scenario: a container that exits 1 after
+# 10s, so kube-state-metrics reports CrashLoopBackOff and the
+# KubePodCrashLooping rule fires.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broken-app
+  namespace: demo
+  labels: {app: broken-app}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: broken-app}
+  template:
+    metadata:
+      labels: {app: broken-app}
+    spec:
+      containers:
+        - name: broken-app
+          image: busybox:1.37
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "starting checkout-service v1.4.2"
+              echo "connecting to postgres at db.demo.svc:5432"
+              sleep 10
+              echo "FATAL: connection pool exhausted: dial tcp db.demo.svc:5432: i/o timeout" >&2
+              exit 1
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}

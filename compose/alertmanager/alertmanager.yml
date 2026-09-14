@@ -1,0 +1,43 @@
+# Alert delivery for the POC.
+#
+# Per docs/RECON.md §15, OpenSRE's designed workflow is PULL: a human starts the
+# conversation in chat and the agent then reads Alertmanager/Grafana/Kubernetes
+# through its tools. So Alertmanager does NOT call OpenSRE — it posts the alert
+# into the Mattermost channel, putting it in front of a human, who then asks
+# @opensre about it in the thread.
+#
+# Mattermost's incoming webhooks accept Slack-shaped payloads, so Alertmanager's
+# native slack_configs works verbatim against a Mattermost webhook URL.
+#
+# The webhook URL is a secret: scripts/up.sh writes it to
+# compose/alertmanager/mattermost_webhook_url (gitignored) from .env.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: mattermost
+  group_by: [alertname, namespace]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 24h
+
+receivers:
+  - name: mattermost
+    slack_configs:
+      - api_url_file: /etc/alertmanager/mattermost_webhook_url
+        channel: '#sre-incidents'
+        username: 'Alertmanager'
+        send_resolved: true
+        title: '{{ if eq .Status "firing" }}🚨{{ else }}✅{{ end }} {{ .CommonLabels.alertname }} — {{ .CommonLabels.namespace }}'
+        # A literal block (|-) keeps the newlines; a folded block (>-) collapses
+        # them into spaces and the whole alert renders as one run-on line.
+        text: |-
+          {{ range .Alerts -}}
+          **{{ .Annotations.summary }}**
+          {{ .Annotations.description }}
+          `severity={{ .Labels.severity }}` · `pod={{ .Labels.pod }}` · `container={{ .Labels.container }}`
+          _depuis {{ .StartsAt.Format "15:04:05 MST" }}_
+          {{ end }}
+          ---
+          Répondez dans ce fil en mentionnant `@opensre` pour lancer une investigation.

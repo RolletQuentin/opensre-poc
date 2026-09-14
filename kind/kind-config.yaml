@@ -1,0 +1,19 @@
+# POC cluster. Deliberately NOT the existing "homelab" kind cluster —
+# both share the docker network "kind", so NodePorts and static IPs must not collide.
+#
+#   kind create cluster --config kind/kind-config.yaml
+#
+# Node container name becomes "opensre-control-plane", which is how the Compose
+# services reach the cluster over the shared "kind" network.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: opensre
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080   # OpenSRE gateway
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 30081   # kube-state-metrics (Prometheus scrape + debug)
+        hostPort: 9091
+        protocol: TCP

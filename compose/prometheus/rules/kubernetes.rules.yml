@@ -1,0 +1,52 @@
+groups:
+  - name: kubernetes
+    rules:
+      # kube-state-metrics only emits kube_pod_container_status_waiting_reason
+      # while the container is ACTUALLY waiting, and a 15s scrape routinely
+      # misses that window on a fast crash loop (the container spends most of
+      # its time in terminated/Error instead). So the restart counter is the
+      # primary signal and the waiting reason is the confirmation, OR'd
+      # together — either one firing is enough.
+      - alert: KubePodCrashLooping
+        # Both branches are aggregated onto the SAME label set before the OR,
+        # otherwise the two series differ (the restart counter carries `uid`)
+        # and Alertmanager receives the same incident twice.
+        # Both branches look back over a window WIDER than the maximum
+        # CrashLoopBackOff interval (5 min). With a 5m lookback the alert
+        # flapped: once the kubelet backed off to one restart per 5 min, the
+        # restart count fell under the threshold and the incident "resolved"
+        # while the pod was still broken.
+        expr: |
+          max by (namespace, pod, container) (
+            increase(kube_pod_container_status_restarts_total[15m])
+          ) >= 3
+          or
+          max by (namespace, pod, container) (
+            max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}[10m])
+          ) >= 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} en CrashLoopBackOff"
+          description: "Le conteneur {{ $labels.container }} redémarre en boucle."
+
+      - alert: KubeContainerOOMKilled
+        expr: max_over_time(kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[5m]) == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Conteneur {{ $labels.namespace }}/{{ $labels.pod }} tué par l'OOM killer"
+          description: "Le conteneur {{ $labels.container }} a dépassé sa limite mémoire."
+
+      # ContainerCreating briefly reports phase=Pending, so this needs a long
+      # `for` to describe a genuinely stuck pod rather than a normal start-up.
+      - alert: KubePodNotReady
+        expr: sum by (namespace, pod) (max_over_time(kube_pod_status_phase{phase=~"Pending|Unknown"}[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} non prêt depuis 10 min"
+          description: "Le pod est bloqué en phase Pending ou Unknown."

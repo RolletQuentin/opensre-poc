@@ -1,0 +1,224 @@
+# Dev-only stack for the OpenSRE POC. Every service joins the pre-existing
+# "kind" Docker network so that:
+#   - pods in the kind cluster reach these services by static IP (via Service +
+#     EndpointSlice in k8s/overlays/kind/), and
+#   - these services reach the cluster as "opensre-control-plane:<NodePort>".
+#
+# The "kind" network is dual-stack (fc00:f853:ccd:e793::/64 + 172.18.0.0/16).
+# 172.18.0.2-3 are taken by the unrelated "homelab" cluster, so the POC parks
+# in 172.18.200.0/24. See docs/RECON.md §1.
+#
+#   docker compose -f compose/docker-compose.yml --env-file .env up -d
+#
+# Optional profiles:  --profile logs (Loki)  --profile ui (Open WebUI)
+
+name: opensre-poc
+
+networks:
+  kind:
+    external: true
+
+volumes:
+  hf-cache:
+  mattermost-db:
+  mattermost-data:
+  grafana-data:
+  prometheus-data:
+  openwebui-data:
+
+services:
+  # ---------------------------------------------------------------- vLLM ----
+  # --served-model-name MUST NOT contain "o<digit>" or "gpt-5": OpenSRE picks
+  # max_completion_tokens vs max_tokens by regex on the MODEL NAME, not the
+  # provider, and vLLM rejects max_completion_tokens. See docs/RECON.md §14.1.
+  vllm:
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.11.0}
+    container_name: poc-vllm
+    ipc: host
+    restart: unless-stopped
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks:
+      kind:
+        ipv4_address: 172.18.200.10
+    command:
+      - --model=${VLLM_MODEL_ID:-Qwen/Qwen3-14B-AWQ}
+      - --served-model-name=${VLLM_SERVED_NAME:-opensre-reasoning}
+      - --enable-auto-tool-choice
+      - --tool-call-parser=${VLLM_TOOL_PARSER:-hermes}
+      - --reasoning-parser=${VLLM_REASONING_PARSER:-qwen3}
+      - --max-model-len=${VLLM_MAX_MODEL_LEN:-32768}
+      - --gpu-memory-utilization=${VLLM_GPU_UTIL:-0.92}
+      # A 14B AWQ model on 16 GB leaves ~4.1 GiB for the KV cache, but a
+      # 32k context needs 5 GiB in fp16. Ada supports fp8, which halves it.
+      # Drop to auto + --max-model-len 24576 if fp8 hurts answer quality.
+      - --kv-cache-dtype=${VLLM_KV_CACHE_DTYPE:-fp8}
+      # CUDA graph capture needs ~1 GiB that this card does not have once a 14B
+      # AWQ model and its KV cache are resident. Eager mode is slower per token
+      # but it is the difference between the engine starting and OOM-ing.
+      - --enforce-eager
+      - --host=0.0.0.0
+      - --port=8000
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 300s
+
+  # ---------------------------------------------------------- Mattermost ----
+  mattermost-db:
+    image: postgres:16-alpine
+    container_name: poc-mattermost-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mmuser
+      POSTGRES_PASSWORD: ${MM_DB_PASSWORD:?set MM_DB_PASSWORD in .env}
+      POSTGRES_DB: mattermost
+    volumes:
+      - mattermost-db:/var/lib/postgresql/data
+    networks:
+      kind:
+        ipv4_address: 172.18.200.20
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mmuser -d mattermost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mattermost:
+    image: mattermost/mattermost-team-edition:10.5
+    container_name: poc-mattermost
+    restart: unless-stopped
+    depends_on:
+      mattermost-db:
+        condition: service_healthy
+    environment:
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: postgres://mmuser:${MM_DB_PASSWORD}@mattermost-db:5432/mattermost?sslmode=disable&connect_timeout=10
+      MM_SERVICESETTINGS_SITEURL: http://localhost:8065
+      MM_SERVICESETTINGS_ENABLEINCOMINGWEBHOOKS: "true"
+      MM_SERVICESETTINGS_ENABLEOUTGOINGWEBHOOKS: "true"
+      MM_SERVICESETTINGS_ENABLECOMMANDS: "true"
+      MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION: "true"
+      MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS: "true"
+      MM_SERVICESETTINGS_ENABLELOCALMODE: "true"
+      # Without this, Mattermost refuses to call a slash command on a private
+      # IP — which is exactly where the OpenSRE gateway lives.
+      MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS: "opensre-control-plane 172.18.0.0/16 localhost 127.0.0.1"
+      MM_PLUGINSETTINGS_ENABLEUPLOADS: "false"
+      MM_LOGSETTINGS_CONSOLELEVEL: INFO
+    volumes:
+      - mattermost-data:/mattermost/data
+    ports:
+      - "127.0.0.1:8065:8065"
+    networks:
+      kind:
+        ipv4_address: 172.18.200.21
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8065/api/v4/system/ping || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  # ------------------------------------------------- Prometheus stack ----
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: poc-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      kind:
+        ipv4_address: 172.18.200.30
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    container_name: poc-alertmanager
+    restart: unless-stopped
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Written by scripts/up.sh from MATTERMOST_WEBHOOK_URL in .env.
+      - ./alertmanager/mattermost_webhook_url:/etc/alertmanager/mattermost_webhook_url:ro
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    networks:
+      kind:
+        ipv4_address: 172.18.200.31
+
+  grafana:
+    image: grafana/grafana-oss:11.5.1
+    container_name: poc-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      kind:
+        ipv4_address: 172.18.200.32
+
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: poc-loki
+    restart: unless-stopped
+    profiles: [logs]
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "127.0.0.1:3100:3100"
+    networks:
+      kind:
+        ipv4_address: 172.18.200.33
+
+  # ----------------------------------------------------- Open WebUI ----
+  # OPENSRE_ENDPOINT stays empty until the OpenAI-compatible surface exists
+  # (POC phase 5). Until then this is a plain chat against vLLM, which is the
+  # "model alone" baseline we compare "model + OpenSRE" against.
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.5.20
+    container_name: poc-open-webui
+    restart: unless-stopped
+    profiles: [ui]
+    environment:
+      OPENAI_API_BASE_URLS: ${OPENWEBUI_API_BASES:-http://vllm:8000/v1}
+      OPENAI_API_KEYS: ${OPENWEBUI_API_KEYS:-EMPTY}
+      ENABLE_OLLAMA_API: "false"
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+      WEBUI_AUTH: "false"
+    volumes:
+      - openwebui-data:/app/backend/data
+    ports:
+      - "127.0.0.1:3001:8080"
+    networks:
+      kind:
+        ipv4_address: 172.18.200.40

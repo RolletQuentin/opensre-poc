@@ -1,0 +1,6 @@
+.env
+*.secret.yaml
+secret-env.yaml
+endpoints.yaml
+kubeconfig-opensre.yaml
+compose/alertmanager/mattermost_webhook_url
