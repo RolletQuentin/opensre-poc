@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: opensre
+resources:
+  - ../../base
+  - endpoints.yaml
+patches:
+  - path: nodeport.yaml
+images:
+  - name: opensre
+    newTag: poc

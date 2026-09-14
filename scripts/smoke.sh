@@ -52,6 +52,24 @@ else
 fi
 
 echo
+echo "== OpenSRE gateway in the cluster =="
+check "deployment available" kubectl --context kind-opensre -n opensre \
+    rollout status deploy/opensre-gateway --timeout=10s
+if [[ -n "${OPENAI_COMPAT_API_KEY:-}" ]]; then
+  check "/v1/models via NodePort" curl -fsS --max-time 5 \
+      -H "Authorization: Bearer ${OPENAI_COMPAT_API_KEY}" http://localhost:8080/v1/models
+fi
+# An unkeyed caller must never reach a turn.
+if code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:8080/v1/models 2>&1); then
+  if [[ "$code" == "401" ]]; then
+    printf '  \033[32mok\033[0m    /v1 refuses an unkeyed caller\n'
+  else
+    printf '  \033[31mFAIL\033[0m  /v1 answered %s to an unkeyed caller\n' "$code"
+    FAILED=$((FAILED + 1))
+  fi
+fi
+
+echo
 if [[ $FAILED -eq 0 ]]; then
   printf '\033[32mall checks passed\033[0m\n'
 else

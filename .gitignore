@@ -4,3 +4,4 @@ secret-env.yaml
 endpoints.yaml
 kubeconfig-opensre.yaml
 compose/alertmanager/mattermost_webhook_url
+k8s/base/secret-env.yaml

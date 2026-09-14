@@ -1,0 +1,17 @@
+# OpenSRE's state root (OPENSRE_HOME): session bindings, the approval audit
+# JSONL, and the per-org nest under orgs/<ORGANIZATION_ID>/.
+#
+# This replaces the Postgres + Redis pair the plan assumed. Neither is needed:
+# DATABASE_URL is optional (open_database() returns None without it) and session
+# bindings are a JSON file, not Redis. See docs/RECON.md §9. A PVC is what makes
+# that file survive a restart; add Postgres only to test several replicas.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: opensre-home
+  namespace: opensre
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi

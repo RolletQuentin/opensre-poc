@@ -44,6 +44,16 @@ echo "==> applying kube-state-metrics"
 kubectl apply -f k8s/demo/kube-state-metrics.yaml
 kubectl -n kube-state-metrics rollout status deploy/kube-state-metrics --timeout=120s
 
+# --- 5. the gateway itself, in the cluster --------------------------------
+# Skipped when Mattermost has not been bootstrapped yet: the secret would be
+# empty and the transport would start "not configured".
+if [[ -n "${MATTERMOST_BOT_TOKEN:-}" ]]; then
+  echo "==> building and deploying the gateway"
+  bash scripts/build-load.sh
+else
+  echo "==> skipping the gateway deploy; run scripts/mattermost-bootstrap.sh then scripts/build-load.sh"
+fi
+
 echo
 echo "up. Next:  scripts/smoke.sh"
 echo "  Grafana      http://localhost:3000   (admin / \$GRAFANA_ADMIN_PASSWORD)"

@@ -30,6 +30,29 @@ jetons déjà présents dans `.env`.
 
 Profils Compose optionnels : `--profile logs` (Loki), `--profile ui` (Open WebUI).
 
+## Identifiants
+
+Tout vit dans `.env` (gitignoré, jamais commité). `up.sh` génère les mots de
+passe au premier montage, donc ils diffèrent d'une installation à l'autre.
+
+```bash
+grep -E '^(MM_|GRAFANA_ADMIN|OPENAI_COMPAT|MATTERMOST_)' .env
+```
+
+| Service | Variable du login | Variable du mot de passe / jeton |
+| --- | --- | --- |
+| Mattermost (admin) | `MM_ADMIN_USERNAME` | `MM_ADMIN_PASSWORD` |
+| Grafana | `admin` (fixe) | `GRAFANA_ADMIN_PASSWORD` |
+| Surface `/v1` OpenSRE | — | `OPENAI_COMPAT_API_KEY` |
+| Bot Mattermost | `@opensre` | `MATTERMOST_BOT_TOKEN` |
+
+Open WebUI, Prometheus et Alertmanager n'ont pas d'authentification dans ce POC.
+Équipe Mattermost : `MM_TEAM` · canal : `MM_CHANNEL`.
+
+⚠️ Une valeur contenant un `;` **doit être quotée** dans `.env` : les scripts
+font `set -a; . ./.env`, et un `;` non quoté termine l'affectation, après quoi
+bash tente d'exécuter le reste.
+
 ## Ce qui écoute où
 
 | Service | Depuis la machine | Depuis un conteneur / un pod |
@@ -131,6 +154,8 @@ nvidia-smi --query-gpu=memory.used,memory.total --format=csv
 | OpenSRE : `'max_tokens' is too large … 20881 input tokens` | les schémas d'outils pèsent ~20,9k tokens | contexte 32768 + `LLM_MAX_TOKENS=2048` |
 | `Nothing ran: one action per response` | `parallel_tool_calls` n'est pas envoyé aux endpoints non-OpenAI | RECON.md §16 — correctif upstream |
 | Agent : « aucun pod dans demo » alors qu'il y en a | `namespace` est un `injected_param` | `KUBECONFIG_NAMESPACE=demo` — RECON.md §17 |
+| Le pod répond « aucun pod dans demo » alors que `opensre health` en voit un | le modèle n'appelle pas l'outil (voir RESULTS §6quater) | relancer, ou passer à un modèle plus capable |
+| `apply -k --dry-run=server` : « namespaces "opensre" not found » | artefact du dry-run (le namespace n'est pas réellement créé) | ignorer ; l'apply réel fonctionne |
 | Le gateway démarre mais un correctif n'a pas d'effet | un ancien gateway tient encore le port ; `pkill -f <motif>` se tue lui-même | `ss -lptn 'sport = :8765'` puis `kill <pid>` |
 | `component openai_compat: failed (could not bind …)` | port déjà pris | libérer le port ; le listener refuse de démarrer à moitié, c'est voulu |
 | L'agent répète une réponse fausse dans un fil | l'historique du fil, pas le câblage — il ne rappelle plus l'outil | taper `/new` dans le fil, ou en ouvrir un neuf |
@@ -196,6 +221,33 @@ curl -sS -N http://localhost:8765/v1/chat/completions \
   -H 'Content-Type: application/json' -H 'X-OpenWebUI-Chat-Id: demo' \
   -d '{"model":"opensre","stream":true,
        "messages":[{"role":"user","content":"Liste les pods du namespace demo."}]}'
+```
+
+## Déployer le gateway dans kind
+
+```bash
+./scripts/build-load.sh            # build + kind load + apply + rollout restart
+kubectl --context kind-opensre -n opensre logs -f deploy/opensre-gateway
+```
+
+L'image est chargée directement dans le nœud (`kind load`) : il n'y a pas de
+registre, d'où `imagePullPolicy: IfNotPresent`. Le tag ne changeant pas
+(`opensre:poc`), `build-load.sh` fait un `rollout restart` — un simple `apply`
+ne redémarrerait pas le pod sur les nouveaux octets.
+
+Les secrets vont dans `k8s/base/secret-env.yaml`, généré depuis `.env` par
+`scripts/render-secret.sh` et gitignoré. Tout le non-secret est dans
+`k8s/base/configmap-env.yaml`, versionné.
+
+Accès : `http://localhost:8080/v1` (NodePort 30080). Mattermost n'a besoin
+d'aucune entrée — son WebSocket est sortant.
+
+```bash
+# Ce que le pod voit réellement
+kubectl --context kind-opensre -n opensre exec deploy/opensre-gateway -- opensre health
+kubectl --context kind-opensre -n opensre exec deploy/opensre-gateway -- sh -c 'cat /kube/config'
+kubectl --context kind-opensre auth can-i list pods -n demo \
+  --as=system:serviceaccount:opensre:opensre
 ```
 
 ## Arrêt / remise à zéro

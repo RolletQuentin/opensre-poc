@@ -233,6 +233,52 @@ Le nouveau listener, lui, s'est comporté correctement : il a signalé
 `failed (could not bind 0.0.0.0:8765)` au lieu de démarrer à moitié.
 Vérifier `ss -lptn 'sport = :<port>'` avant de conclure.
 
+## 6quater. Déploiement dans kind — la démo tourne depuis le cluster
+
+`kubectl -k k8s/overlays/kind`, image chargée par `kind load` (pas de registre),
+`scripts/build-load.sh` fait build + load + apply + rollout restart.
+
+| Vérification | Résultat |
+| --- | --- |
+| Pod `opensre-gateway` | ✅ `1/1 Running` |
+| `component mattermost: websocket connected` **depuis le pod** | ✅ via Service + EndpointSlice vers Compose |
+| `component openai_compat: serving /v1` | ✅ |
+| `/v1/models` via NodePort (`localhost:8080`) | ✅ avec clé, **401** sans |
+| `opensre health` **dans le pod** | ✅ **4 PASSED** : alertmanager, grafana, kubernetes, mattermost |
+| Kubernetes via token de ServiceAccount + ClusterRole | ✅ `namespace 'demo' accessible (1 pod visible)` |
+| PVC monté et écrit | ✅ `anonymous_id`, `gateway/` |
+| **Démo bout-en-bout depuis le cluster** | ✅ cause racine exacte (voir ci-dessous) |
+
+Démo : un fil Mattermost, une question, et le gateway **in-cluster** répond
+
+> `FATAL: connection pool exhausted: dial tcp db.demo.svc:5432: i/o timeout`
+
+— exactement la panne plantée dans `k8s/demo/broken-app.yaml`.
+
+### Ce que la recon avait permis de simplifier
+
+- **Ni Postgres ni Redis** : `DATABASE_URL` est optionnel et les bindings de
+  session sont un fichier JSON (RECON §9). Un **PVC** suffit et rend l'état
+  durable. Deux composants de moins que le plan.
+- **`MODE=gateway`**, pas `web` : seul le gateway compose un TurnRunner (§5).
+- **Un seul NodePort**, pour la surface `/v1`. Mattermost n'en a pas besoin :
+  son WebSocket est sortant.
+- **Le kubeconfig généré est obligatoire** (§7). L'init container l'écrit avec
+  `tokenFile:` plutôt qu'un token figé, donc le client suit la rotation du
+  token projeté — vérifié supporté par le client Python 36.0.3.
+- **ClusterRole en lecture seule** dérivé des appels réels du code (§14.2) :
+  `kubectl auth can-i list pods -n demo` → `yes`, aucun verbe d'écriture,
+  aucun accès aux `secrets`.
+
+### Fiabilité des réponses : toujours le point faible
+
+Sur 5 tours in-cluster avec la même question, **1 réponse exacte, 4 « aucun pod
+dans demo »** — alors que `opensre health` et `opensre ask` **dans le même pod**
+listaient le pod correctement, et que le RBAC autorise bien la lecture. Ce n'est
+donc ni le déploiement, ni les droits : c'est le 14B qui n'appelle pas toujours
+l'outil. Même symptôme qu'au §3, et la raison pour laquelle un modèle plus
+capable — ou davantage de contexte — est la vraie prochaine étape.
+
 ## 7. À faire ensuite
 
 1. **Baseline hébergée** — rejouer la même question avec `LLM_PROVIDER=anthropic` pour

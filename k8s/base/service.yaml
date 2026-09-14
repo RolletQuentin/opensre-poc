@@ -1,0 +1,17 @@
+# The OpenAI-compatible surface is the only port that needs reaching from
+# outside: Mattermost dials out over a websocket, so it needs no ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensre-gateway
+  namespace: opensre
+spec:
+  selector:
+    app: opensre-gateway
+  ports:
+    - name: openai-compat
+      port: 8765
+      targetPort: 8765
+    - name: health
+      port: 8000
+      targetPort: 8000

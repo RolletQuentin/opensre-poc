@@ -1,0 +1,48 @@
+# Non-secret runtime configuration. Secrets (tokens, API keys) are generated
+# into secret-env.yaml by scripts/up.sh from .env and never committed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opensre-env
+  namespace: opensre
+data:
+  # MODE=gateway, not web: only the gateway process composes a TurnRunner and
+  # hosts the transports. MODE=web serves health and /alerts, and nothing
+  # drains that inbox outside the interactive shell. See docs/RECON.md §5.
+  MODE: "gateway"
+  ENV: "development"
+  OPENSRE_NO_TELEMETRY: "1"
+  SENTRY_DSN: ""
+
+  # Every chat transport refuses a turn without this (principal resolution).
+  ORGANIZATION_ID: "opensre-poc"
+  # State root, backed by the PVC so bindings and the audit log survive a restart.
+  OPENSRE_HOME: "/workspace/opensre"
+
+  # vLLM through the already-existing custom-openai provider; no provider code
+  # is needed. The served model name must contain no "o<digit>" and no "gpt-5":
+  # OpenSRE picks max_completion_tokens by regex on the model NAME, and vLLM
+  # rejects it. See docs/RECON.md §14.1.
+  LLM_PROVIDER: "custom-openai"
+  CUSTOM_OPENAI_BASE_URL: "http://vllm.opensre.svc:8000/v1"
+  CUSTOM_OPENAI_MODEL: "opensre-reasoning"
+  CUSTOM_OPENAI_REASONING_MODEL: "opensre-reasoning"
+  CUSTOM_OPENAI_CLASSIFICATION_MODEL: "opensre-reasoning"
+  CUSTOM_OPENAI_TOOLCALL_MODEL: "opensre-reasoning"
+  LLM_MAX_TOKENS: "2048"
+  # Local model, nothing leaves the machine.
+  OPENSRE_MASK_ENABLED: "false"
+
+  GRAFANA_INSTANCE_URL: "http://grafana.opensre.svc:3000"
+  ALERTMANAGER_URL: "http://alertmanager.opensre.svc:9093"
+  MATTERMOST_URL: "http://mattermost.opensre.svc:8065"
+
+  # Written by the init container from the projected ServiceAccount token: the
+  # Kubernetes integration never calls load_incluster_config(), so a kubeconfig
+  # file is mandatory, not a convenience. See docs/RECON.md §7.
+  KUBECONFIG: "/kube/config"
+  KUBECONFIG_NAMESPACE: "demo"
+
+  OPENAI_COMPAT_HOST: "0.0.0.0"
+  OPENAI_COMPAT_PORT: "8765"
+  PORT: "8000"

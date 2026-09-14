@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensre-gateway
+  namespace: opensre
+  labels: {app: opensre-gateway}
+spec:
+  replicas: 1
+  # The PVC is ReadWriteOnce and the state is a JSON file, so two pods must
+  # never overlap. Recreate, not RollingUpdate.
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: opensre-gateway}
+  template:
+    metadata:
+      labels: {app: opensre-gateway}
+    spec:
+      serviceAccountName: opensre
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        # The Kubernetes integration supports a kubeconfig file or inline YAML
+        # only -- it never calls load_incluster_config() -- so the projected
+        # ServiceAccount token has to be written into one. tokenFile (not a
+        # baked-in token) is what lets the client follow the projected token as
+        # it rotates. See docs/RECON.md §7.
+        - name: write-kubeconfig
+          image: busybox:1.37
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              cat > /kube/config <<'KUBECONFIG'
+              apiVersion: v1
+              kind: Config
+              current-context: in-cluster
+              clusters:
+                - name: in-cluster
+                  cluster:
+                    server: https://kubernetes.default.svc
+                    certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              users:
+                - name: opensre
+                  user:
+                    tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+              contexts:
+                - name: in-cluster
+                  context:
+                    cluster: in-cluster
+                    user: opensre
+              KUBECONFIG
+          volumeMounts:
+            - {name: kube, mountPath: /kube}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+      containers:
+        - name: gateway
+          image: opensre:poc
+          # The image is loaded straight into the kind node; there is no
+          # registry to pull it from.
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: {name: opensre-env}
+            - secretRef: {name: opensre-secrets}
+          ports:
+            - {name: openai-compat, containerPort: 8765}
+            - {name: health, containerPort: 8000}
+          volumeMounts:
+            - {name: kube, mountPath: /kube, readOnly: true}
+            - {name: home, mountPath: /workspace/opensre}
+            - {name: tmp, mountPath: /tmp}
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            # /readyz reports startup readiness separately from liveness.
+            httpGet: {path: /readyz, port: health}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "2", memory: 4Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+      volumes:
+        - name: kube
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: home
+          persistentVolumeClaim: {claimName: opensre-home}
